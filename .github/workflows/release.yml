@@ -1,0 +1,86 @@
+name: Build and release
+
+# Push a tag like v1.0.0 to publish a release. "Run workflow" builds a test zip
+# you can download from the run's Artifacts section.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_ZIP: ffmpeg-n8.1-latest-win64-gpl-8.1.zip
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip pyinstaller==6.18.0
+
+      - name: Stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          (Get-Content readyclip/__init__.py) -replace '__version__ = ".*"', "__version__ = `"$v`"" |
+            Set-Content readyclip/__init__.py -Encoding utf8
+
+      - name: Build GUI exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name ReadyClip
+          --icon assets/readyclip.ico --add-data "assets/readyclip.png;assets"
+          ReadyClip.pyw
+
+      - name: Build CLI exe
+        run: >
+          pyinstaller --noconfirm --onefile --console --name readyclip-cli
+          --icon assets/readyclip.ico readyclip_cli.py
+
+      - name: Bundle ffmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$env:FFMPEG_ZIP" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_src
+          $bin = Get-ChildItem ffmpeg_src -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $pkg = New-Item -ItemType Directory -Force pkg
+          Copy-Item dist/ReadyClip.exe, dist/readyclip-cli.exe $pkg
+          Copy-Item $bin.FullName, (Join-Path $bin.DirectoryName ffprobe.exe) $pkg
+          $lic = Get-ChildItem ffmpeg_src -Recurse -Filter LICENSE.txt | Select-Object -First 1
+          Copy-Item $lic.FullName (Join-Path $pkg FFMPEG-LICENSE.txt)
+          Copy-Item README.md, LICENSE $pkg
+          & "$pkg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+
+      - name: Smoke test CLI
+        shell: pwsh
+        run: |
+          pkg/ffmpeg.exe -hide_banner -loglevel error -f lavfi -i testsrc2=s=1280x720:r=30:d=2 -pix_fmt yuv420p smoke.mp4
+          pkg/readyclip-cli.exe smoke.mp4 --cpu --res 720
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path converted/smoke.mp4)) { throw "no output" }
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = if ("${{ github.ref_type }}" -eq "tag") { "ReadyClip-${{ github.ref_name }}-win64.zip" } else { "ReadyClip-dev-win64.zip" }
+          Compress-Archive pkg/* $name
+          "ZIP_NAME=$name" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: ${{ env.ZIP_NAME }}
+          generate_release_notes: true

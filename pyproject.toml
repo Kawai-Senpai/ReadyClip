@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "readyclip"
+dynamic = ["version"]
+description = "Convert action-cam (GoPro and similar) videos into phone-friendly, shareable MP4s."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ranit Bhowmick", email = "mail@ranitbhowmick.com" }]
+requires-python = ">=3.9"
+
+[project.scripts]
+readyclip = "readyclip.cli:main"
+
+[project.gui-scripts]
+readyclip-gui = "readyclip.gui:main"
+
+[tool.setuptools]
+packages = ["readyclip"]
+
+[tool.setuptools.dynamic]
+version = { attr = "readyclip.__version__" }
